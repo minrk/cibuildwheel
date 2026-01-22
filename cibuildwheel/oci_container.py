@@ -551,8 +551,11 @@ class MockContainer(OCIContainer):
     (e.g. Woodpecker CI).
     """
     def __enter__(self) -> "MockContainer":
-        log.warning(f"Using container_engine=local. Assuming we are already running in {self.image}")
         self._copied_in: list[Path] = []
+        if self.cwd and not Path(self.cwd).exists():
+            cwd = Path(self.cwd)
+            cwd.mkdir(exist_ok=True, parents=True)
+            self._copied_in.append(cwd)
         return self
 
     def __exit__(
@@ -576,6 +579,8 @@ class MockContainer(OCIContainer):
         capture_output: bool = False,
         cwd: PathOrStr | None = None,
     ) -> str:
+        if cwd is None:
+            cwd = self.cwd
         return call(*args, env=env, capture_stdout=capture_output, cwd=cwd)
 
     def copy_into(self, from_path: Path, to_path: PurePath) -> None:
@@ -583,7 +588,7 @@ class MockContainer(OCIContainer):
         to_path = Path(to_path)
         log.quiet(f"Copy {from_path} -> {to_path}")
         if from_path.is_dir():
-            shutil.copytree(from_path, to_path)
+            shutil.copytree(from_path, to_path, dirs_exist_ok=True)
         else:
             to_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(from_path, to_path)
