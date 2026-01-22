@@ -12,7 +12,7 @@ from .. import errors
 from ..architecture import Architecture
 from ..frontend import get_build_frontend_extra_flags
 from ..logger import log
-from ..oci_container import OCIContainer, OCIContainerEngineConfig, OCIPlatform
+from ..oci_container import MockContainer, OCIContainer, OCIContainerEngineConfig, OCIPlatform
 from ..options import BuildOptions, Options
 from ..selector import BuildSelector
 from ..util import resources
@@ -453,11 +453,12 @@ def build(options: Options, tmp_path: Path) -> None:
     for build_step in get_build_steps(options, python_configurations):
         try:
             # check the container engine is installed
-            subprocess.run(
-                [build_step.container_engine.name, "--version"],
-                check=True,
-                stdout=subprocess.DEVNULL,
-            )
+            if build_step.container_engine.name != "local":
+                subprocess.run(
+                    [build_step.container_engine.name, "--version"],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                )
         except subprocess.CalledProcessError as error:
             msg = unwrap(
                 f"""
@@ -473,12 +474,18 @@ def build(options: Options, tmp_path: Path) -> None:
 
         try:
             ids_to_build = [x.identifier for x in build_step.platform_configs]
-            log.step(f"Starting container image {build_step.container_image}...")
+
+            if build_step.container_engine.name == "local":
+                Container = MockContainer
+                log.step(f"Using local runner, assuming we are already in a container using image {build_step.container_image}...")
+            else:
+                Container = OCIContainer
+                log.step(f"Starting container image {build_step.container_image}...")
 
             print(f"info: This container will host the build for {', '.join(ids_to_build)}...")
             architecture = Architecture(build_step.platform_tag.split("_", 1)[1])
 
-            with OCIContainer(
+            with Container(
                 image=build_step.container_image,
                 oci_platform=ARCHITECTURE_OCI_PLATFORM_MAP[architecture],
                 cwd=container_project_path,

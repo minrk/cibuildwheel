@@ -23,7 +23,7 @@ from .typing import PathOrStr
 from .util.cmd import call
 from .util.helpers import FlexibleVersion, parse_key_value_string, strtobool
 
-ContainerEngineName = Literal["docker", "podman"]
+ContainerEngineName = Literal["docker", "podman", "local"]
 
 
 # Order of the enum matters for tests. 386 shall appear before amd64.
@@ -74,7 +74,7 @@ class OCIContainerEngineConfig:
             ["create_args", "create-args", "disable_host_mount", "disable-host-mount"],
         )
         name = " ".join(config_dict["name"])
-        if name not in {"docker", "podman"}:
+        if name not in {"docker", "podman", "local"}:
             msg = f"unknown container engine {name}"
             raise ValueError(msg)
 
@@ -539,6 +539,66 @@ class OCIContainer:
         )
         output = str(completed.stdout, encoding="utf8", errors="surrogateescape")
         return output
+
+
+class MockContainer(OCIContainer):
+    """
+    Present OCIContainer API, but run local commands.
+
+    Essentially assumes we are being run in an appropriate container already,
+    not meant to be run on an actual host machine,
+    but where container management is happening outside cibuildwheel
+    (e.g. Woodpecker CI).
+    """
+    def __enter__(self) -> "MockContainer":
+        log.warning(f"Using container_engine=local. Assuming we are already running in {self.image}")
+        self._copied_in: list[Path] = []
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        for path in self._copied_in:
+            log.quiet(f"Cleaning up {path}")
+            if path.is_dir():
+                shutil.rmtree(path)
+            elif path.exists():
+                path.unlink()
+        self._copied_in = []
+
+    def call(
+        self,
+        args: Sequence[PathOrStr],
+        env: Mapping[str, str] | None = None,
+        capture_output: bool = False,
+        cwd: PathOrStr | None = None,
+    ) -> str:
+        return call(*args, env=env, capture_stdout=capture_output, cwd=cwd)
+
+    def copy_into(self, from_path: Path, to_path: PurePath) -> None:
+                # log the command we're executing
+        to_path = Path(to_path)
+        log.quiet(f"Copy {from_path} -> {to_path}")
+        if from_path.is_dir():
+            shutil.copytree(from_path, to_path)
+        else:
+            to_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(from_path, to_path)
+        self._copied_in.append(to_path)
+
+    def copy_out(self, from_path: PurePath, to_path: Path) -> None:
+        # note: we assume from_path is a dir
+        from_path = Path(from_path)
+        log.quiet(f"Copy {from_path} -> {to_path}")
+        to_path.mkdir(parents=True, exist_ok=True)
+        if from_path.is_dir():
+            shutil.copytree(from_path, to_path, dirs_exist_ok=True)
+        else:
+            shutil.copyfile(from_path, to_path)
+
 
 
 def shell_quote(path: PurePath) -> str:
